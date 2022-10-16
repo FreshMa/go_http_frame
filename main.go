@@ -9,13 +9,6 @@ import (
 	"time"
 )
 
-// 优雅关闭
-// 1. 停止接收新请求：需要一个开关，开关打开的时候需要停止接收新情求，使用一个middleware (done)
-// 2. 处理完当前的剩余请求：维持请求计数，这个也得用一个middleware吧
-// 3. 关闭当前的svr (done)
-// 4. 释放资源
-// 5. 超时强制关闭 (done)
-
 func WaitForShutdown(hooks ...Hook) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt)
