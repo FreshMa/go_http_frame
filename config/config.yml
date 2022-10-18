@@ -1,7 +1,7 @@
 server:
   -
     name: http_server
-    listen: 8080
+    listen: :10022
     protocol: http
 
 log:
@@ -14,16 +14,16 @@ clients:
     name: redis_cli
     type: redis
     addr: 127.0.0.1:6379, 127.0.0.1:6380
-    read_timeout: 5s
-    write_timeout: 5s
+    read_timeout: 5
+    write_timeout: 5
   -
     name: mysql_cli
     type: mysql
-    user: root
-    passwd: 123456
+    user: mm
+    passwd: 123123123
     addr: 127.0.0.1:3306
-    read_timeout: 5s
-    write_timeout: 5s
+    read_timeout: 5
+    write_timeout: 5
   -
     name: order_cli
     type: grpc_svr

@@ -9,7 +9,13 @@ import (
 	"time"
 )
 
-func SignUp(c *ctx.Context) {
+type UserServiceImpl struct{}
+
+func DefaultUserService() UserService {
+	return &UserServiceImpl{}
+}
+
+func (u *UserServiceImpl) SignUp(c *ctx.Context) {
 	user := &dto.User{}
 	if err := c.ReadJson(user); err != nil {
 		log.Printf("read json failed, err:%v\n", err)
@@ -28,7 +34,7 @@ func SignUp(c *ctx.Context) {
 	}
 }
 
-func List(c *ctx.Context) {
+func (u *UserServiceImpl) List(c *ctx.Context) {
 	log.Printf("list all user\n")
 	users := []dto.User{
 		{
