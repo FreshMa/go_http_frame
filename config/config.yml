@@ -1,0 +1,30 @@
+server:
+  -
+    name: http_server
+    listen: 8080
+    protocol: http
+
+log:
+  path: ./log
+  level: debug
+
+# 配置也可以放在网络上，自己代码里边去做
+clients:
+  -
+    name: redis_cli
+    type: redis
+    addr: 127.0.0.1:6379, 127.0.0.1:6380
+    read_timeout: 5s
+    write_timeout: 5s
+  -
+    name: mysql_cli
+    type: mysql
+    user: root
+    passwd: 123456
+    addr: 127.0.0.1:3306
+    read_timeout: 5s
+    write_timeout: 5s
+  -
+    name: order_cli
+    type: grpc_svr
+    addr: 127.0.0.1:1234
