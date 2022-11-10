@@ -12,7 +12,7 @@ import (
 func Metric() ctx.HandleFunc {
 	return func(c *ctx.Context) {
 		uuidStr := uuid.NewString()
-		log.Printf("[REQUEST] [%s] url:%s, method:%s\n",
+		log.Printf("[%s] [REQUEST] url:%s, method:%s\n",
 			uuidStr,
 			c.R.URL.Path,
 			c.R.Method)
@@ -20,6 +20,6 @@ func Metric() ctx.HandleFunc {
 		start := time.Now().UnixMicro()
 		c.Next()
 		end := time.Now().UnixMicro()
-		log.Printf("[COST] [%s] %d us\n", uuidStr, end-start)
+		log.Printf("[%s] [COST] %d us\n", uuidStr, end-start)
 	}
 }

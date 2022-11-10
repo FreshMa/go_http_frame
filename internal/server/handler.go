@@ -1,7 +1,6 @@
 package server
 
 import (
-	"log"
 	"myserver/internal/ctx"
 	"net/http"
 	"strings"
@@ -92,7 +91,7 @@ func (h *TreeBasedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c := ctx.NewContext(w, r)
 	c.Hs = h.globalMiddlewares
 	c.Hs = append(c.Hs, handlers...)
-	log.Printf("len of handler:%d\n", len(c.Hs))
+	//log.Printf("len of handler:%d\n", len(c.Hs))
 	c.Next()
 }
 
@@ -140,7 +139,7 @@ func (h *TreeBasedHandler) Query(root *Node, method string, path string) []ctx.H
 	paths := strings.Split(strings.Trim(path, "/"), "/")
 	cur := root
 	for _, p := range paths {
-		log.Printf("p:%s\n", p)
+		//log.Printf("p:%s\n", p)
 		n, ok := cur.Match(p, true)
 		if !ok {
 			return nil

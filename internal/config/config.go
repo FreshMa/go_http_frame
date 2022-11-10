@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"io/ioutil"
 
 	"gopkg.in/yaml.v2"
@@ -36,14 +37,30 @@ type ClientConfig struct {
 type Config struct {
 	Servers []ServerConfig `json:"server" yaml:"server"`
 	Log     LogConfig      `json:"log" yaml:"log"`
-	Clients []ClientConfig `json:"client" yaml:"client"`
+	Clients []ClientConfig `json:"clients" yaml:"clients"`
+
+	mpClients map[string]ClientConfig
 }
 
 func (c *Config) Validate() error {
 	if len(c.Servers) == 0 {
 		return errors.New("config: empty servers")
 	}
+
+	for _, cli := range c.Clients {
+		if cli.Name == "" || cli.Addr == "" {
+			return errors.New("config: empty cli name or addr")
+		}
+	}
 	return nil
+}
+
+func (c *Config) GetCliConfigByName(name string) (*ClientConfig, error) {
+	cli, ok := c.mpClients[name]
+	if !ok {
+		return nil, errors.New("invalid name")
+	}
+	return &cli, nil
 }
 
 func NewConfig(path string) (*Config, error) {
@@ -53,8 +70,10 @@ func NewConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
-	var conf Config
-	err = yaml.Unmarshal(con, &conf)
+	conf := &Config{
+		mpClients: make(map[string]ClientConfig),
+	}
+	err = yaml.Unmarshal(con, conf)
 	if err != nil {
 		return nil, err
 	}
@@ -62,5 +81,11 @@ func NewConfig(path string) (*Config, error) {
 	if err := conf.Validate(); err != nil {
 		return nil, err
 	}
-	return &conf, nil
+
+	for _, cli := range conf.Clients {
+		cli := cli
+		fmt.Printf("name:%s\n", cli.Name)
+		conf.mpClients[cli.Name] = cli
+	}
+	return conf, nil
 }

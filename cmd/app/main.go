@@ -11,6 +11,7 @@ import (
 	"myserver/internal/config"
 	"myserver/internal/ctx"
 	"myserver/internal/middleware"
+	"myserver/internal/mq"
 	"myserver/internal/server"
 	"myserver/internal/service"
 )
@@ -30,14 +31,33 @@ func main() {
 	g := server.NewGracefulShutdown()
 	svr := server.NewServer(g.RejectRequestMiddleware(), middleware.Metric())
 
-	// userservice 注册路由
+	// 启动rabbitmq
+	mqCli, err := conf.GetCliConfigByName("rabbitmq")
+	if err != nil {
+		log.Fatalf("get mq config failed, err:%v\n", err)
+	}
+	rabbitMQ, err := mq.NewRabbitMQ(mqCli.Addr)
+	if err != nil {
+		log.Fatalf("failed to init rabbitmq, err:%v\n", err)
+	}
+	chName := "test_channel"
+	qName := "test_queue"
+	rabbitMQ.CreateChannel(chName, 0)
+	rabbitMQ.BindQueue(chName, qName)
+
+	// 注册路由
 	// TODO 后续会把repo当做userSvc的依赖也注入进去
 	userSvc := service.DefaultUserService()
+	mqSvc := service.NewMQService(rabbitMQ)
+
 	service.RegisterUserService(svr, userSvc)
+	service.RegisterMQService(svr, mqSvc)
 
 	// 启用优雅关闭
 	go WaitForShutdown(g.WaitServerShutdown(svr),
-		g.RejectRequestAndWaiting)
+		g.RejectRequestAndWaiting,
+		rabbitMQ.GracefulClose,
+	)
 
 	svr.Start(conf.Servers[0].Listen)
 }

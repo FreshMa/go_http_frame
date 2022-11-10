@@ -28,3 +28,6 @@ clients:
     name: order_cli
     type: grpc_svr
     addr: 127.0.0.1:1234
+  -
+    name: rabbitmq
+    addr: amqp://guest:guest@localhost:5672/
