@@ -7,6 +7,7 @@ import (
 	"myserver/internal/entity/dto"
 	"myserver/internal/mq"
 	"net/http"
+	"time"
 )
 
 type MQServiceImpl struct {
@@ -27,8 +28,9 @@ func (s *MQServiceImpl) Push(c *ctx.Context) {
 		return
 	}
 
-	bgCtx := context.Background()
-	if err := s.mq.Push(bgCtx, req.Queue, []byte(req.Body)); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.mq.Push(ctx, req.Queue, []byte(req.Body)); err != nil {
 		log.Printf("push failed, req:%v, err:%v\n", req, err)
 		c.W.WriteHeader(http.StatusInternalServerError)
 		return

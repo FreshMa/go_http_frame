@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log"
 	"myserver/internal/server"
-	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -108,14 +107,12 @@ func (c *RabbitMQ) BindQueue(chName, queueName string) error {
 }
 
 func (c *RabbitMQ) Push(ctx context.Context, queue string, content []byte) error {
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
 	ch, ok := c.binding[queue]
 	if !ok {
 		return errors.New("no valid queue binding")
 	}
 
-	return ch.PublishWithContext(timeoutCtx,
+	return ch.PublishWithContext(ctx,
 		"",    // exchange type
 		queue, // routing key
 		false, // mandatory
