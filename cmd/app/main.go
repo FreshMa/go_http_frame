@@ -40,10 +40,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to init rabbitmq, err:%v\n", err)
 	}
-	chName := "test_channel"
-	qName := "test_queue"
-	rabbitMQ.CreateChannel(chName, 0)
-	rabbitMQ.BindQueue(chName, qName)
 
 	// 注册路由
 	// TODO 后续会把repo当做userSvc的依赖也注入进去

@@ -1,6 +1,18 @@
 package dto
 
-type MQReq struct {
-	Queue string `json:"queue"`
-	Body  string `json:"body"`
+type MQPushReq struct {
+	ExchangeName string `json:"exchange_name"`
+	RoutingKey   string `json:"routing_key"`
+	Body         string `json:"body"`
+}
+
+type MQCreateExchangeReq struct {
+	ExchangeName string `json:"exchange_name"`
+	ExchangeType string `json:"exchange_type"`
+}
+
+type MQQueueBindReq struct {
+	QueueName    string `json:"queue_name"`
+	BindingKey   string `json:"binding_key"`
+	ExchangeName string `json:"exchange_name"`
 }

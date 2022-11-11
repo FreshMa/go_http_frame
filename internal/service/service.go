@@ -18,10 +18,14 @@ func RegisterUserService(svr server.Server, user UserService) {
 }
 
 type MQService interface {
+	CreateExchange(c *ctx.Context)
+	DeclareAndBindQueue(c *ctx.Context)
 	Push(c *ctx.Context)
 	Consume(c *ctx.Context)
 }
 
 func RegisterMQService(svr server.Server, mq MQService) {
 	svr.Route(http.MethodPost, "/mq/push", mq.Push)
+	svr.Route(http.MethodPost, "/mq/exchange/create", mq.CreateExchange)
+	svr.Route(http.MethodPost, "/mq/queue/declare_bind", mq.DeclareAndBindQueue)
 }

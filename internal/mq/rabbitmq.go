@@ -5,43 +5,24 @@ import (
 	"errors"
 	"log"
 	"myserver/internal/server"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type Options struct {
-	Durable bool // for queue
-	AutoACK bool // for consumer
 }
 
 type Option func(*Options)
 
-func WithDurable(durable bool) Option {
-	return func(o *Options) {
-		o.Durable = durable
-	}
-}
-
-func WithAutoACK(autoACK bool) Option {
-	return func(o *Options) {
-		o.AutoACK = autoACK
-	}
-}
-
-type Channel struct {
-	name        string
-	ch          *amqp.Channel
-	prefetchCnt int
-}
-
 type RabbitMQ struct {
-	url     string
-	conn    *amqp.Connection
-	chs     map[string]Channel // channelName->channel
-	binding map[string]string  // queue->channelName
+	url  string
+	conn *amqp.Connection
+	ch   *amqp.Channel
 
-	redialCh chan struct{}
+	redialCh       chan struct{}
+	lastRedialTime time.Time
 }
 
 var defaultOption = &Options{}
@@ -56,11 +37,14 @@ func NewRabbitMQ(url string, opts ...Option) (*RabbitMQ, error) {
 		opt(defaultOption)
 	}
 
+	defaultCh, err := conn.Channel()
+	if err != nil {
+		return nil, err
+	}
 	mq := &RabbitMQ{
 		url:      url,
 		conn:     conn,
-		chs:      make(map[string]Channel),
-		binding:  make(map[string]string),
+		ch:       defaultCh,
 		redialCh: make(chan struct{}, 1),
 	}
 
@@ -68,7 +52,7 @@ func NewRabbitMQ(url string, opts ...Option) (*RabbitMQ, error) {
 	return mq, nil
 }
 
-// Reconnect
+// 监控mq server健康状况，处理重连
 func (m *RabbitMQ) monitor() {
 	baseDuration := 10 * time.Second
 	ticker := time.NewTicker(baseDuration)
@@ -76,18 +60,27 @@ func (m *RabbitMQ) monitor() {
 	for {
 		select {
 		case <-ticker.C:
+			// amqp会定期发送心跳（默认10s），如果发送失败会将conn置为Close状态
+			// 这里可以直接用IsClosed来判断mq是否挂掉了/网络是否有问题
 			if m.conn.IsClosed() {
-				m.redialCh <- struct{}{}
+				if len(m.redialCh) < 1 {
+					m.redialCh <- struct{}{}
+				}
 				errCnt++
 			} else {
 				errCnt = 0
 			}
 
-			if errCnt%10 == 0 {
+			// TODO 一个不成熟的退避算法，10s一次
+			if errCnt > 0 && errCnt%10 == 0 {
 				ticker.Reset(baseDuration + time.Duration(errCnt/10)*time.Second)
 			}
 		case <-m.redialCh:
-			m.reconnect()
+			// 防止短时间内大量重建请求
+			if time.Since(m.lastRedialTime) > 10*time.Second {
+				m.reconnect()
+				m.lastRedialTime = time.Now()
+			}
 		}
 	}
 }
@@ -104,9 +97,6 @@ func (m *RabbitMQ) reconnect() {
 			//log.Printf("dial failed, retry...")
 			continue
 		}
-		// 尝试关闭旧连接
-		m.conn.Close()
-		m.conn = newConn
 		break
 	}
 	// 获取失败了
@@ -115,24 +105,18 @@ func (m *RabbitMQ) reconnect() {
 		return
 	}
 
-	// 获取成功，需要重置channel和queue
-	m.rebindChAndQueue()
-}
-
-func (m *RabbitMQ) rebindChAndQueue() {
-	// queue->channel_name
-	// channel_name->channel
-	newChannels := make(map[string]Channel)
-	for k, v := range m.chs {
-		v := v
-		ch, err := m.conn.Channel()
-		if err != nil {
-			continue
-		}
-		v.ch = ch
-		newChannels[k] = v
+	// 获取成功，需要重建channel以及绑定queue
+	newCh, err := newConn.Channel()
+	if err != nil {
+		log.Printf("mq: recreate channel failed:%v\n", err)
+		newConn.Close()
+		return
 	}
-	m.chs = newChannels
+
+	// TODO 是否需要加锁
+	m.conn.Close()
+	m.conn = newConn
+	m.ch = newCh
 }
 
 func (m *RabbitMQ) Close() error {
@@ -153,60 +137,78 @@ func (m *RabbitMQ) GracefulClose(ctx context.Context) error {
 	}
 }
 
-func (m *RabbitMQ) CreateChannel(name string, prefetchCnt int) error {
-	ch, err := m.conn.Channel()
-	if err != nil {
-		return err
-	}
-	err = ch.Qos(prefetchCnt, 0, false)
-	if err != nil {
-		return err
+func (m *RabbitMQ) CreateExchange(ctx context.Context, name, exType string) error {
+	if exType != amqp.ExchangeFanout && exType != amqp.ExchangeDirect &&
+		exType != amqp.ExchangeTopic && exType != amqp.ExchangeHeaders {
+		return errors.New("mq: illegal rabbitmq exchange type")
 	}
 
-	m.chs[name] = Channel{
-		name:        name,
-		ch:          ch,
-		prefetchCnt: prefetchCnt,
+	doneCh := make(chan error)
+	go func() {
+		doneCh <- m.ch.ExchangeDeclare(
+			name,   // name
+			exType, // type
+			true,   // durable
+			false,  // auto-deleted
+			false,  // internal
+			false,  // no-wait
+			nil,    // arguments
+		)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return errors.New("timeout")
+	case err := <-doneCh:
+		return err
 	}
-	return err
 }
 
-func (m *RabbitMQ) BindQueue(chName, queueName string) error {
-	channel, ok := m.chs[chName]
-	if !ok {
-		return errors.New("cannot find channel")
-	}
+func (m *RabbitMQ) DeclareAndBindQueue(ctx context.Context, queueName, bindingKey, exchangeName string) error {
+	doneCh := make(chan error)
 
-	_, err := channel.ch.QueueDeclare(
-		queueName,
-		defaultOption.Durable, // durable
-		false,                 // delete when unsued
-		false,                 // exclusive
-		false,                 // no-wait
-		nil,                   // args
-	)
-	if err != nil {
+	go func() {
+		_, err := m.ch.QueueDeclare(
+			queueName,
+			true,  // durable
+			false, // delete when unsued
+			false, // exclusive
+			false, // no-wait
+			nil,   // args
+		)
+		if err != nil {
+			doneCh <- err
+		}
+
+		if len(exchangeName) > 0 {
+			doneCh <- m.ch.QueueBind(
+				queueName,    // queue name
+				bindingKey,   // binding key
+				exchangeName, // exchange name
+				false,        // no wait
+				nil,          // args
+			)
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return errors.New("timeout")
+	case err := <-doneCh:
 		return err
 	}
-	m.binding[queueName] = chName
-	return err
 }
 
-func (m *RabbitMQ) Push(ctx context.Context, queue string, content []byte) error {
-	chName, ok := m.binding[queue]
-	if !ok {
-		return errors.New("no valid queue binding")
-	}
-	channel := m.chs[chName]
-
-	err := channel.ch.PublishWithContext(ctx,
-		"",    // exchange type
-		queue, // routing key
-		false, // mandatory
-		false, // immediate
+func (m *RabbitMQ) Push(ctx context.Context, exchangeName, routingKey string, content []byte) error {
+	err := m.ch.PublishWithContext(ctx,
+		exchangeName, // exchange name
+		routingKey,   // routing key
+		false,        // mandatory
+		false,        // immediate
 		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        content,
+			DeliveryMode: amqp.Persistent,
+			ContentType:  "text/plain",
+			Body:         content,
 		},
 	)
 	// 重连通知只需要有一个就够了
@@ -218,15 +220,21 @@ func (m *RabbitMQ) Push(ctx context.Context, queue string, content []byte) error
 	return err
 }
 
-// StartConsumer 启动指定数量的消费者，并提供对应的消费函数
-func (m *RabbitMQ) StartConsumer(ctx context.Context, consumerCnt int, queue string, prefetchSize int, fn func([]byte) error) error {
-	chName, ok := m.binding[queue]
-	if !ok {
-		return errors.New("no valid queue binding")
+// Consume 启动指定数量的消费者，并提供对应的消费函数
+func (m *RabbitMQ) Consume(ctx context.Context, consumerCnt int, queue string, prefetchCnt int, fn func([]byte) error) error {
+	// 针对消费者，每个消费者组使用一个channel
+	ch, err := m.conn.Channel()
+	if err != nil {
+		return err
 	}
-	channel := m.chs[chName]
 
-	msgs, err := channel.ch.Consume(
+	err = ch.Qos(prefetchCnt, 0, false)
+	if err != nil {
+		ch.Close()
+		return err
+	}
+
+	msgs, err := ch.Consume(
 		queue,
 		"",    // consumer
 		false, // auto ack
@@ -236,10 +244,13 @@ func (m *RabbitMQ) StartConsumer(ctx context.Context, consumerCnt int, queue str
 		nil,   //args
 	)
 	if err != nil {
+		ch.Close()
 		return err
 	}
 
+	var wg sync.WaitGroup
 	for i := 0; i < consumerCnt; i++ {
+		wg.Add(1)
 		go func(idx int) {
 			for d := range msgs {
 				err = fn(d.Body)
@@ -247,8 +258,19 @@ func (m *RabbitMQ) StartConsumer(ctx context.Context, consumerCnt int, queue str
 					log.Printf("[%d] consume failed, content:%s, err:%v\n", idx, string(d.Body), err)
 				}
 			}
+			// 如果走到这里，说明msgs已经关闭了，需要重新创建连接
+			wg.Done()
 		}(i)
-
 	}
+
+	// 起一个协程来负责重建消费者
+	go func() {
+		wg.Wait()
+		if len(m.redialCh) < 1 {
+			m.redialCh <- struct{}{}
+		}
+		m.Consume(ctx, consumerCnt, queue, prefetchCnt, fn)
+	}()
+
 	return nil
 }
