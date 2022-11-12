@@ -6,6 +6,7 @@ import (
 	"log"
 	"myserver/internal/server"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -23,6 +24,7 @@ type RabbitMQ struct {
 
 	redialCh       chan struct{}
 	lastRedialTime time.Time
+	activeClose    int32 // 是否主动关闭，主动关闭时无需重建连接
 }
 
 var defaultOption = &Options{}
@@ -42,10 +44,11 @@ func NewRabbitMQ(url string, opts ...Option) (*RabbitMQ, error) {
 		return nil, err
 	}
 	mq := &RabbitMQ{
-		url:      url,
-		conn:     conn,
-		ch:       defaultCh,
-		redialCh: make(chan struct{}, 1),
+		url:         url,
+		conn:        conn,
+		ch:          defaultCh,
+		redialCh:    make(chan struct{}, 1),
+		activeClose: 0,
 	}
 
 	go mq.monitor()
@@ -71,13 +74,13 @@ func (m *RabbitMQ) monitor() {
 				errCnt = 0
 			}
 
-			// TODO 一个不成熟的退避算法，10s一次
+			// TODO 一个不成熟的退避算法， 每过10s ticker延长5s
 			if errCnt > 0 && errCnt%10 == 0 {
-				ticker.Reset(baseDuration + time.Duration(errCnt/10)*time.Second)
+				ticker.Reset(baseDuration + time.Duration(errCnt/10*5)*time.Second)
 			}
 		case <-m.redialCh:
 			// 防止短时间内大量重建请求
-			if time.Since(m.lastRedialTime) > 10*time.Second {
+			if atomic.LoadInt32(&m.activeClose) == 0 && time.Since(m.lastRedialTime) > 10*time.Second {
 				m.reconnect()
 				m.lastRedialTime = time.Now()
 			}
@@ -86,22 +89,12 @@ func (m *RabbitMQ) monitor() {
 }
 
 func (m *RabbitMQ) reconnect() {
-	retryCnt := 0
-	maxRetry := 3
 	var newConn *amqp.Connection
 	var err error
 
-	for ; retryCnt < maxRetry; retryCnt++ {
-		newConn, err = amqp.Dial(m.url)
-		if err != nil {
-			//log.Printf("dial failed, retry...")
-			continue
-		}
-		break
-	}
-	// 获取失败了
-	if retryCnt == maxRetry {
-		log.Printf("mq: rabbitmq reconnect exceed max retry cnt, stop retry...")
+	newConn, err = amqp.Dial(m.url)
+	if err != nil {
+		log.Printf("mq: rabbitmq redial failed:%v\n", err)
 		return
 	}
 
@@ -120,11 +113,13 @@ func (m *RabbitMQ) reconnect() {
 }
 
 func (m *RabbitMQ) Close() error {
+	atomic.StoreInt32(&m.activeClose, 1)
 	return m.conn.Close()
 }
 
 func (m *RabbitMQ) GracefulClose(ctx context.Context) error {
 	doneCh := make(chan error)
+	atomic.StoreInt32(&m.activeClose, 1)
 	go func() {
 		doneCh <- m.Close()
 	}()
@@ -151,7 +146,7 @@ func (m *RabbitMQ) CreateExchange(ctx context.Context, name, exType string) erro
 			true,   // durable
 			false,  // auto-deleted
 			false,  // internal
-			false,  // no-wait
+			false,  // no-wait, 为false表示需要阻塞等待exchange建立
 			nil,    // arguments
 		)
 	}()
@@ -266,10 +261,19 @@ func (m *RabbitMQ) Consume(ctx context.Context, consumerCnt int, queue string, p
 	// 起一个协程来负责重建消费者
 	go func() {
 		wg.Wait()
+		// 主动关闭的情况下不需要重建
+		if atomic.LoadInt32(&m.activeClose) == 1 {
+			return
+		}
+
 		if len(m.redialCh) < 1 {
 			m.redialCh <- struct{}{}
 		}
-		m.Consume(ctx, consumerCnt, queue, prefetchCnt, fn)
+		// 这里休眠1s再重新开始重建消费者
+		time.Sleep(1 * time.Second)
+		if err := m.Consume(ctx, consumerCnt, queue, prefetchCnt, fn); err != nil {
+			log.Printf("recreate consumer failed:%v\n", err)
+		}
 	}()
 
 	return nil
