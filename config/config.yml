@@ -31,3 +31,6 @@ clients:
   -
     name: rabbitmq
     addr: amqp://guest:guest@localhost:5672/
+  -
+    name: kafka
+    addr: localhost:9092

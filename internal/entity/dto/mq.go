@@ -16,3 +16,12 @@ type MQQueueBindReq struct {
 	BindingKey   string `json:"binding_key"`
 	ExchangeName string `json:"exchange_name"`
 }
+
+type KafkaMsg struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+type KafkaPublishReq struct {
+	Topic string     `json:"topic"`
+	Msgs  []KafkaMsg `json:"msgs"`
+}

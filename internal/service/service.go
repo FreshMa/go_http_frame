@@ -29,3 +29,11 @@ func RegisterMQService(svr server.Server, mq MQService) {
 	svr.Route(http.MethodPost, "/mq/exchange/create", mq.CreateExchange)
 	svr.Route(http.MethodPost, "/mq/queue/declare_bind", mq.DeclareAndBindQueue)
 }
+
+type KafkaService interface {
+	Publish(c *ctx.Context)
+}
+
+func RegisterKafkaService(svr server.Server, kaf KafkaService) {
+	svr.Route(http.MethodPost, "/mq/kafka/publist", kaf.Publish)
+}
