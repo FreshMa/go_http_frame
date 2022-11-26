@@ -17,9 +17,9 @@ func Metric() ctx.HandleFunc {
 			c.R.URL.Path,
 			c.R.Method)
 
-		start := time.Now().UnixMicro()
+		start := time.Now().UnixNano() * 1e3
 		c.Next()
-		end := time.Now().UnixMicro()
+		end := time.Now().UnixNano() * 1e3
 		log.Printf("[%s] [COST] %d us\n", uuidStr, end-start)
 	}
 }
