@@ -42,7 +42,7 @@ func main() {
 	}
 
 	// 启动kafka
-	kafkaCliConf, err := conf.GetCliConfigByName("kakfa")
+	kafkaCliConf, err := conf.GetCliConfigByName("kafka")
 	if err != nil {
 		log.Fatalf("get kafka config failed, err:%v\n", err)
 	}
